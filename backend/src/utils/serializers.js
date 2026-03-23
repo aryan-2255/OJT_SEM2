@@ -16,6 +16,9 @@ function serializeDoctor(doctor) {
     name: doctor.user.name,
     email: doctor.user.email,
     specialization: doctor.specialization,
+    availabilityMode: doctor.availabilityMode ?? null,
+    bookingWindowDays: doctor.bookingWindowDays ?? null,
+    lastBookableDate: doctor.lastBookableDate ?? null,
   };
 }
 

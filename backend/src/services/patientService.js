@@ -1,10 +1,11 @@
-const { AppointmentStatus } = require("@prisma/client");
+const { AppointmentStatus, AvailabilityMode } = require("@prisma/client");
 const env = require("../config/env");
 const prisma = require("../lib/prisma");
 const { syncCompletedAppointments } = require("./appointmentStatusService");
 const { buildAppointmentFilters, buildPaginationMeta } = require("../utils/appointmentQuery");
 const httpError = require("../utils/httpError");
 const {
+  getActiveAvailabilityMode,
   getAvailabilityRowsForDate,
 } = require("../utils/availability");
 const {
@@ -32,6 +33,51 @@ function parseDoctorId(doctorId) {
   return parsedDoctorId;
 }
 
+function getTodayDateOnly() {
+  return toDateOnly(formatLocalDateOnly(new Date()));
+}
+
+function addDaysToDateOnly(value, days) {
+  const nextValue = new Date(value);
+  nextValue.setUTCDate(nextValue.getUTCDate() + days);
+  return nextValue;
+}
+
+function getBookingWindowDays(availabilityMode) {
+  return availabilityMode === AvailabilityMode.WEEKLY ? 7 : 1;
+}
+
+function buildDoctorAvailabilityMeta(recurringRows, today = getTodayDateOnly()) {
+  const availabilityMode = getActiveAvailabilityMode(recurringRows);
+  const bookingWindowDays = getBookingWindowDays(availabilityMode);
+  const lastBookableDate = formatDateOnly(addDaysToDateOnly(today, bookingWindowDays - 1));
+
+  return {
+    availabilityMode,
+    bookingWindowDays,
+    lastBookableDate,
+  };
+}
+
+function serializeDoctorWithAvailability(doctor, recurringRows, today = getTodayDateOnly()) {
+  return serializeDoctor({
+    ...doctor,
+    ...buildDoctorAvailabilityMeta(recurringRows, today),
+  });
+}
+
+function isDateWithinBookingWindow(dateOnly, lastBookableDate) {
+  return dateOnly <= lastBookableDate;
+}
+
+function buildBookingWindowMessage(availabilityMode, lastBookableDate) {
+  if (availabilityMode === AvailabilityMode.WEEKLY) {
+    return `Weekly mode allows booking from today through ${formatDateOnly(lastBookableDate)}.`;
+  }
+
+  return "Daily mode allows booking only for today.";
+}
+
 async function findDoctorOrThrow(doctorId) {
   const doctor = await prisma.doctor.findUnique({
     where: {
@@ -54,8 +100,21 @@ async function findDoctorOrThrow(doctorId) {
   return doctor;
 }
 
-async function loadAvailabilityBlocks(client, doctorId, dateOnly) {
-  const [dayOff, recurringRows] = await Promise.all([
+async function loadRecurringAvailabilityRows(client, doctorId) {
+  return client.doctorAvailability.findMany({
+    where: {
+      doctorId,
+    },
+    orderBy: [
+      { mode: "asc" },
+      { dayOfWeek: "asc" },
+      { startTime: "asc" },
+    ],
+  });
+}
+
+async function loadAvailabilityBlocks(client, doctorId, dateOnly, recurringRows = null) {
+  const [dayOff, resolvedRecurringRows] = await Promise.all([
     client.doctorDayOff.findUnique({
       where: {
         doctorId_date: {
@@ -64,23 +123,14 @@ async function loadAvailabilityBlocks(client, doctorId, dateOnly) {
         },
       },
     }),
-    client.doctorAvailability.findMany({
-      where: {
-        doctorId,
-      },
-      orderBy: [
-        { mode: "asc" },
-        { dayOfWeek: "asc" },
-        { startTime: "asc" },
-      ],
-    }),
+    recurringRows ? Promise.resolve(recurringRows) : loadRecurringAvailabilityRows(client, doctorId),
   ]);
 
   if (dayOff) {
     return [];
   }
 
-  return getAvailabilityRowsForDate(recurringRows, dateOnly);
+  return getAvailabilityRowsForDate(resolvedRecurringRows, dateOnly);
 }
 
 function buildOpenSlots(blocks, date, bookedTimes) {
@@ -103,6 +153,7 @@ function buildOpenSlots(blocks, date, bookedTimes) {
 }
 
 async function listDoctors() {
+  const today = getTodayDateOnly();
   const doctors = await prisma.doctor.findMany({
     include: {
       user: {
@@ -111,13 +162,21 @@ async function listDoctors() {
           email: true,
         },
       },
+      availabilityBlocks: {
+        select: {
+          mode: true,
+          dayOfWeek: true,
+          startTime: true,
+          endTime: true,
+        },
+      },
     },
     orderBy: {
       id: "asc",
     },
   });
 
-  return doctors.map(serializeDoctor);
+  return doctors.map((doctor) => serializeDoctorWithAvailability(doctor, doctor.availabilityBlocks, today));
 }
 
 async function getAvailableSlots(doctorId, date) {
@@ -129,13 +188,32 @@ async function getAvailableSlots(doctorId, date) {
 
   const doctor = await findDoctorOrThrow(parsedDoctorId);
   const dateOnly = toDateOnly(date);
+  const today = getTodayDateOnly();
 
-  if (dateOnly < toDateOnly(formatLocalDateOnly(new Date()))) {
+  if (dateOnly < today) {
     throw httpError(400, "Cannot view slots for a past date.");
   }
 
+  const recurringRows = await loadRecurringAvailabilityRows(prisma, parsedDoctorId);
+  const availabilityMeta = buildDoctorAvailabilityMeta(recurringRows, today);
+  const lastBookableDate = toDateOnly(availabilityMeta.lastBookableDate);
+
+  if (!isDateWithinBookingWindow(dateOnly, lastBookableDate)) {
+    return {
+      doctor: serializeDoctorWithAvailability(doctor, recurringRows, today),
+      date,
+      slots: [],
+      bookingWindowDays: availabilityMeta.bookingWindowDays,
+      lastBookableDate: availabilityMeta.lastBookableDate,
+      bookingWindowMessage: buildBookingWindowMessage(
+        availabilityMeta.availabilityMode,
+        lastBookableDate
+      ),
+    };
+  }
+
   const [blocks, appointments] = await Promise.all([
-    loadAvailabilityBlocks(prisma, parsedDoctorId, dateOnly),
+    loadAvailabilityBlocks(prisma, parsedDoctorId, dateOnly, recurringRows),
     prisma.appointment.findMany({
       where: {
         doctorId: parsedDoctorId,
@@ -154,9 +232,15 @@ async function getAvailableSlots(doctorId, date) {
   const slots = buildOpenSlots(blocks, date, bookedTimes);
 
   return {
-    doctor: serializeDoctor(doctor),
+    doctor: serializeDoctorWithAvailability(doctor, recurringRows, today),
     date,
     slots,
+    bookingWindowDays: availabilityMeta.bookingWindowDays,
+    lastBookableDate: availabilityMeta.lastBookableDate,
+    bookingWindowMessage: buildBookingWindowMessage(
+      availabilityMeta.availabilityMode,
+      lastBookableDate
+    ),
   };
 }
 
@@ -213,7 +297,9 @@ async function bookAppointment(userId, payload) {
 
   const dateOnly = toDateOnly(payload.date);
 
-  if (dateOnly < toDateOnly(formatLocalDateOnly(new Date()))) {
+  const today = getTodayDateOnly();
+
+  if (dateOnly < today) {
     throw httpError(400, "Appointments can only be booked for today or a future date.");
   }
 
@@ -263,7 +349,18 @@ async function bookAppointment(userId, payload) {
     throw httpError(404, "Doctor not found.");
   }
 
-  const blocks = await loadAvailabilityBlocks(prisma, parsedDoctorId, dateOnly);
+  const recurringRows = await loadRecurringAvailabilityRows(prisma, parsedDoctorId);
+  const availabilityMeta = buildDoctorAvailabilityMeta(recurringRows, today);
+  const lastBookableDate = toDateOnly(availabilityMeta.lastBookableDate);
+
+  if (!isDateWithinBookingWindow(dateOnly, lastBookableDate)) {
+    throw httpError(
+      400,
+      buildBookingWindowMessage(availabilityMeta.availabilityMode, lastBookableDate)
+    );
+  }
+
+  const blocks = await loadAvailabilityBlocks(prisma, parsedDoctorId, dateOnly, recurringRows);
   const availableSlots = new Set(buildOpenSlots(blocks, payload.date, new Set()));
 
   if (!availableSlots.has(payload.time)) {

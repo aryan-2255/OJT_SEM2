@@ -4,7 +4,7 @@ import SectionCard from "../components/SectionCard";
 import StatusMessage from "../components/StatusMessage";
 import { useAuth } from "../context/AuthContext";
 import { patientApi } from "../services/api";
-import { getTodayDateValue } from "../services/date";
+import { addDaysToDateValue, getTodayDateValue } from "../services/date";
 import { formatTimeLabel } from "../services/time";
 
 const SLOT_REFRESH_INTERVAL_MS = 15000;
@@ -100,6 +100,34 @@ function buildHistoryQuery(filters) {
   };
 }
 
+function getDoctorLastBookableDate(doctor) {
+  const today = getTodayDateValue();
+
+  if (!doctor?.availabilityMode) {
+    return today;
+  }
+
+  if (doctor.lastBookableDate) {
+    return doctor.lastBookableDate;
+  }
+
+  return doctor.availabilityMode === "WEEKLY" ? addDaysToDateValue(today, 6) : today;
+}
+
+function getBookingWindowMessage(doctor) {
+  if (!doctor?.availabilityMode) {
+    return "Choose a doctor with active availability to see open slots.";
+  }
+
+  if (doctor.availabilityMode === "WEEKLY") {
+    return `Weekly mode is active. Booking is open from today through ${getDoctorLastBookableDate(
+      doctor
+    )}.`;
+  }
+
+  return "Daily mode is active. Booking is open only for today.";
+}
+
 function PatientDashboard() {
   const { auth } = useAuth();
   const [doctors, setDoctors] = useState([]);
@@ -169,6 +197,18 @@ function PatientDashboard() {
     }
 
     const response = await patientApi.getSlots(auth.token, doctorId, date);
+    setDoctors((current) =>
+      current.map((doctor) =>
+        String(doctor.id) === String(response.doctor.id)
+          ? {
+              ...doctor,
+              availabilityMode: response.doctor.availabilityMode,
+              bookingWindowDays: response.doctor.bookingWindowDays,
+              lastBookableDate: response.doctor.lastBookableDate,
+            }
+          : doctor
+      )
+    );
     setSlots(response.slots);
   }
 
@@ -215,6 +255,26 @@ function PatientDashboard() {
       setSelectedDoctorId(String(doctors[0].id));
     }
   }, [doctors, selectedDoctorId]);
+
+  const selectedDoctor = doctors.find((doctor) => String(doctor.id) === selectedDoctorId);
+  const lastBookableDate = getDoctorLastBookableDate(selectedDoctor);
+
+  useEffect(() => {
+    const today = getTodayDateValue();
+    let nextDate = selectedDate;
+
+    if (selectedDate < today) {
+      nextDate = today;
+    }
+
+    if (selectedDate > lastBookableDate) {
+      nextDate = lastBookableDate;
+    }
+
+    if (nextDate !== selectedDate) {
+      setSelectedDate(nextDate);
+    }
+  }, [lastBookableDate, selectedDate]);
 
   useEffect(() => {
     async function refreshSelectedDateData() {
@@ -338,8 +398,6 @@ function PatientDashboard() {
     }
   }
 
-  const selectedDoctor = doctors.find((doctor) => String(doctor.id) === selectedDoctorId);
-
   return (
     <DashboardLayout
       title="Patient Dashboard"
@@ -398,7 +456,8 @@ function PatientDashboard() {
 
           <p className="muted-text">
             All appointment times are shown in AM/PM. Slots follow the doctor&apos;s active daily
-            or weekly availability and automatically respect full-day day offs.
+            or weekly availability and automatically respect full-day day offs.{" "}
+            {getBookingWindowMessage(selectedDoctor)}
           </p>
 
           <label>
@@ -407,6 +466,7 @@ function PatientDashboard() {
               type="date"
               value={selectedDate}
               min={getTodayDateValue()}
+              max={lastBookableDate}
               onChange={(event) => setSelectedDate(event.target.value)}
             />
           </label>

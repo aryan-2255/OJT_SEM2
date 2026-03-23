@@ -18,8 +18,8 @@ Assumption kept intentionally simple:
 
 - Doctor availability is recurring until changed
 - The doctor chooses one recurring mode at a time:
-  - `DAILY`: the same blocks apply every day
-  - `WEEKLY`: each enabled weekday can have its own custom blocks and break
+  - `DAILY`: the same blocks apply every day, but patients can book only for today
+  - `WEEKLY`: each enabled weekday can have its own custom blocks and break, and patients can book within a 7-day window
 - Full-day day offs can be added as date-specific overrides
 - Appointment slots are generated in 15-minute intervals from the active recurring blocks
 
@@ -162,9 +162,9 @@ Doctor:
 Patient:
 
 - `GET /patient/doctors` - list doctors
-- `GET /patient/doctors/:doctorId/slots?date=YYYY-MM-DD` - list open slots for a doctor on today or a future date based on recurring availability, day offs, existing bookings, and passed time for today
+- `GET /patient/doctors/:doctorId/slots?date=YYYY-MM-DD` - list open slots for a doctor inside that doctor's active booking window based on recurring availability, day offs, existing bookings, and passed time for today
 - `GET /patient/appointments` - list own appointments
-- `POST /patient/appointments` - book an appointment on today or a future date if the patient has no other appointment on that same date
+- `POST /patient/appointments` - book an appointment inside that doctor's active booking window if the patient has no other appointment on that same date
 - `PATCH /patient/appointments/:id/cancel` - cancel own appointment
 
 ## Frontend Pages
@@ -182,6 +182,8 @@ Role-based routing is enforced on the client and the server.
 - The system stays within the requested scope and does not include multi-tenant logic or external auth
 - Booking is auto-confirmed immediately after validation
 - A patient can have only one appointment per day
+- `DAILY` availability exposes only today's booking window
+- `WEEKLY` availability exposes a 7-day booking window starting from today
 - Doctors are created by admins only
 - Admin doctor deletion removes the doctor's recurring availability, day offs, and appointments through database cascades
 
