@@ -303,11 +303,7 @@ function PatientDashboard() {
       Promise.all([
         loadSlots(selectedDoctorId, selectedDate),
         loadSelectedDateBooking(selectedDate),
-      ]).catch((requestError) => {
-        setSlots([]);
-        setSelectedDateBookedAppointment(null);
-        setNotice({ type: "error", text: requestError.message });
-      });
+      ]).catch(() => {});
     }, SLOT_REFRESH_INTERVAL_MS);
 
     return () => {
@@ -317,9 +313,7 @@ function PatientDashboard() {
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      loadAppointmentSections().catch((requestError) => {
-        setNotice({ type: "error", text: requestError.message });
-      });
+      loadAppointmentSections().catch(() => {});
     }, APPOINTMENT_REFRESH_INTERVAL_MS);
 
     return () => {

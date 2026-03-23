@@ -364,9 +364,7 @@ function DoctorDashboard() {
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      loadAppointmentSections().catch((requestError) => {
-        setNotice({ type: "error", text: requestError.message });
-      });
+      loadAppointmentSections().catch(() => {});
     }, APPOINTMENT_REFRESH_INTERVAL_MS);
 
     return () => {

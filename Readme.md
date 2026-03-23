@@ -95,11 +95,13 @@ Backend:
 3. Set `DIRECT_URL` to the direct PostgreSQL connection for Prisma migrations
 4. Set `JWT_SECRET`
 5. Keep `CLIENT_URLS` aligned with the frontend origin you use in the browser
+6. Set `HOSPITAL_TIMEZONE` if the hospital should run on a timezone other than the default `Asia/Kolkata`
 
 Frontend:
 
 1. Copy `frontend/.env.example` to `frontend/.env`
 2. Set `VITE_API_URL` if your backend is not running on `http://127.0.0.1:5001/api`
+3. Set `VITE_HOSPITAL_TIMEZONE` only if it should differ from the backend timezone
 
 ## Run Locally
 
@@ -238,6 +240,7 @@ Environment variables:
 - `PORT` = leave blank or set by Render automatically
 - `CLIENT_URLS` = `https://frontendojtsem2.vercel.app`
 - `SLOT_INTERVAL_MINUTES` = `15`
+- `HOSPITAL_TIMEZONE` = `Asia/Kolkata`
 - `ADMIN_NAME` = your admin display name
 - `ADMIN_EMAIL` = admin login email
 - `ADMIN_PASSWORD` = admin login password

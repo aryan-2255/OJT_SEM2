@@ -27,4 +27,5 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET,
   clientUrls: parseClientUrls(),
   slotIntervalMinutes: Number(process.env.SLOT_INTERVAL_MINUTES) || 15,
+  hospitalTimezone: process.env.HOSPITAL_TIMEZONE || "Asia/Kolkata",
 };

@@ -1,5 +1,35 @@
+const env = require("../config/env");
+
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+function getHospitalDateTimeParts(value = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: env.hospitalTimezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(value).reduce((accumulator, part) => {
+    if (part.type !== "literal") {
+      accumulator[part.type] = part.value;
+    }
+
+    return accumulator;
+  }, {});
+
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour === "24" ? "00" : parts.hour,
+    minute: parts.minute,
+  };
+}
 
 function isValidDateString(value) {
   return DATE_PATTERN.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
@@ -22,10 +52,13 @@ function formatDateOnly(value) {
 }
 
 function formatLocalDateOnly(value) {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
+  const { year, month, day } = getHospitalDateTimeParts(value);
   return `${year}-${month}-${day}`;
+}
+
+function getCurrentHospitalMinutes(value = new Date()) {
+  const { hour, minute } = getHospitalDateTimeParts(value);
+  return Number(hour) * 60 + Number(minute);
 }
 
 function timeToMinutes(time) {
@@ -68,7 +101,7 @@ function filterPastSlotsForDate(date, slots, now = new Date()) {
     return slots;
   }
 
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const currentMinutes = getCurrentHospitalMinutes(now);
 
   return slots.filter((slot) => timeToMinutes(slot) > currentMinutes);
 }
@@ -79,6 +112,7 @@ module.exports = {
   formatDisplayTime,
   formatLocalDateOnly,
   filterPastSlotsForDate,
+  getCurrentHospitalMinutes,
   generateSlots,
   isValidDateString,
   isValidTimeString,

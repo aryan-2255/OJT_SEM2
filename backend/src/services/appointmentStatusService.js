@@ -3,13 +3,14 @@ const env = require("../config/env");
 const prisma = require("../lib/prisma");
 const {
   formatLocalDateOnly,
+  getCurrentHospitalMinutes,
   minutesToTime,
   toDateOnly,
 } = require("../utils/time");
 
 async function syncCompletedAppointments(now = new Date()) {
   const today = toDateOnly(formatLocalDateOnly(now));
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const currentMinutes = getCurrentHospitalMinutes(now);
   const completedCutoffMinutes = currentMinutes - env.slotIntervalMinutes;
 
   if (!today) {
