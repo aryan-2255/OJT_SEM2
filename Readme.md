@@ -19,7 +19,7 @@ Assumption kept intentionally simple:
 - Doctor availability is recurring until changed
 - The doctor chooses one recurring mode at a time:
   - `DAILY`: the same blocks apply every day
-  - `WEEKLY`: the same blocks apply only on selected weekdays
+  - `WEEKLY`: each enabled weekday can have its own custom blocks and break
 - Full-day day offs can be added as date-specific overrides
 - Appointment slots are generated in 15-minute intervals from the active recurring blocks
 
@@ -152,7 +152,7 @@ Admin:
 Doctor:
 
 - `GET /doctor/schedules` - list recurring availability blocks and the active mode
-- `POST /doctor/schedules` - replace recurring availability with the submitted daily or weekly setup
+- `POST /doctor/schedules` - replace recurring availability with the submitted daily setup or per-day weekly setup
 - `DELETE /doctor/schedules/:id` - remove one recurring availability block if no booked slot depends on it
 - `GET /doctor/day-offs` - list future day offs
 - `POST /doctor/day-offs` - add a full-day override for one date

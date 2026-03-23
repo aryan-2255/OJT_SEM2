@@ -319,20 +319,36 @@ a {
   margin-top: 1rem;
 }
 
-.field-label {
-  display: inline-block;
-  margin-bottom: 0.5rem;
+.weekly-day-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
 }
 
-.chip-row {
+.weekly-day-card {
+  padding: 1rem;
+  border: 1px solid rgba(24, 48, 42, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.weekly-day-card.active {
+  background: rgba(11, 122, 99, 0.06);
+  border-color: rgba(11, 122, 99, 0.18);
+}
+
+.weekly-day-header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
 }
 
-.chip-button {
-  min-width: 0;
-  padding-inline: 0.9rem;
+.weekly-day-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
 }
 
 .filter-row {
@@ -413,6 +429,11 @@ a {
 
   .hero-panel {
     flex-direction: column;
+  }
+
+  .weekly-day-grid,
+  .weekly-day-fields {
+    grid-template-columns: 1fr;
   }
 
   .profile-panel {

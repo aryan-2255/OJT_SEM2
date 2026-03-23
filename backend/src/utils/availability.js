@@ -74,9 +74,7 @@ function normalizeWeekdays(weekdays) {
 
   const cleanedWeekdays = Array.from(
     new Set(
-      weekdays
-        .map((value) => (typeof value === "string" ? value.trim().toUpperCase() : ""))
-        .filter(Boolean)
+      weekdays.map(normalizeWeekday).filter(Boolean)
     )
   );
 
@@ -93,7 +91,21 @@ function normalizeWeekdays(weekdays) {
   return WEEKDAY_ORDER.filter((weekday) => cleanedWeekdays.includes(weekday));
 }
 
-function buildAvailabilityRows(doctorId, mode, scheduleBlocks, weekdays = []) {
+function normalizeWeekday(value) {
+  const cleanedValue = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+  if (!cleanedValue) {
+    return "";
+  }
+
+  if (!WEEKDAY_ORDER.includes(cleanedValue)) {
+    throw httpError(400, "Invalid weekday selected.");
+  }
+
+  return cleanedValue;
+}
+
+function buildAvailabilityRows(doctorId, mode, scheduleBlocks = [], weeklySchedules = []) {
   if (mode === AvailabilityMode.DAILY) {
     return scheduleBlocks.map((block) => ({
       doctorId,
@@ -104,11 +116,11 @@ function buildAvailabilityRows(doctorId, mode, scheduleBlocks, weekdays = []) {
     }));
   }
 
-  return weekdays.flatMap((weekday) =>
-    scheduleBlocks.map((block) => ({
+  return weeklySchedules.flatMap((weekdaySchedule) =>
+    weekdaySchedule.scheduleBlocks.map((block) => ({
       doctorId,
       mode,
-      dayOfWeek: weekday,
+      dayOfWeek: weekdaySchedule.dayOfWeek,
       startTime: block.startTime,
       endTime: block.endTime,
     }))
@@ -144,5 +156,6 @@ module.exports = {
   getAvailabilityRowsForDate,
   getWeekdayForDate,
   isAppointmentCoveredByAvailability,
+  normalizeWeekday,
   normalizeWeekdays,
 };

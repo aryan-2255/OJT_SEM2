@@ -9,6 +9,7 @@ const {
   buildDayOffDateSet,
   getActiveAvailabilityMode,
   isAppointmentCoveredByAvailability,
+  normalizeWeekday,
   normalizeWeekdays,
 } = require("../utils/availability");
 const {
@@ -91,13 +92,7 @@ function buildScheduleBlocks({ startTime, endTime, breakStartTime, breakEndTime 
   return scheduleBlocks;
 }
 
-function parseSchedulePayload(payload) {
-  const mode = typeof payload.mode === "string" ? payload.mode.trim().toUpperCase() : "";
-
-  if (!Object.values(AvailabilityMode).includes(mode)) {
-    throw httpError(400, "Select a valid availability mode.");
-  }
-
+function parseTimeWindow(payload) {
   if (!isValidTimeString(payload.startTime) || !isValidTimeString(payload.endTime)) {
     throw httpError(400, "Invalid schedule time selected.");
   }
@@ -112,13 +107,59 @@ function parseSchedulePayload(payload) {
     throw httpError(400, `Schedule must allow at least one ${env.slotIntervalMinutes}-minute slot.`);
   }
 
-  const weekdays = mode === AvailabilityMode.WEEKLY ? normalizeWeekdays(payload.weekdays) : [];
-  const scheduleBlocks = buildScheduleBlocks(payload);
+  return buildScheduleBlocks(payload);
+}
+
+function parseWeeklySchedules(payload) {
+  if (Array.isArray(payload.weeklyDays)) {
+    const enabledEntries = payload.weeklyDays.filter((entry) => entry?.enabled);
+
+    if (enabledEntries.length === 0) {
+      throw httpError(400, "Select at least one weekday for weekly availability.");
+    }
+
+    const seenWeekdays = new Set();
+
+    return enabledEntries.map((entry) => {
+      const dayOfWeek = normalizeWeekday(entry.dayOfWeek);
+
+      if (!dayOfWeek) {
+        throw httpError(400, "Invalid weekday selected.");
+      }
+
+      if (seenWeekdays.has(dayOfWeek)) {
+        throw httpError(400, "Duplicate weekday selected.");
+      }
+
+      seenWeekdays.add(dayOfWeek);
+
+      return {
+        dayOfWeek,
+        scheduleBlocks: parseTimeWindow(entry),
+      };
+    });
+  }
+
+  const weekdays = normalizeWeekdays(payload.weekdays);
+  const scheduleBlocks = parseTimeWindow(payload);
+
+  return weekdays.map((dayOfWeek) => ({
+    dayOfWeek,
+    scheduleBlocks,
+  }));
+}
+
+function parseSchedulePayload(payload) {
+  const mode = typeof payload.mode === "string" ? payload.mode.trim().toUpperCase() : "";
+
+  if (!Object.values(AvailabilityMode).includes(mode)) {
+    throw httpError(400, "Select a valid availability mode.");
+  }
 
   return {
     mode,
-    weekdays,
-    scheduleBlocks,
+    scheduleBlocks: mode === AvailabilityMode.DAILY ? parseTimeWindow(payload) : [],
+    weeklySchedules: mode === AvailabilityMode.WEEKLY ? parseWeeklySchedules(payload) : [],
   };
 }
 
@@ -208,10 +249,10 @@ async function listSchedules(userId) {
 
 async function createSchedule(userId, payload) {
   const doctor = await resolveDoctor(userId);
-  const { mode, weekdays, scheduleBlocks } = parseSchedulePayload(payload);
+  const { mode, scheduleBlocks, weeklySchedules } = parseSchedulePayload(payload);
   const currentDayOffs = await loadDayOffRows(prisma, doctor.id, getTodayDateOnly());
 
-  const rowsToCreate = buildAvailabilityRows(doctor.id, mode, scheduleBlocks, weekdays);
+  const rowsToCreate = buildAvailabilityRows(doctor.id, mode, scheduleBlocks, weeklySchedules);
 
   await ensureAvailabilityPreservesBookedAppointments(
     doctor.id,

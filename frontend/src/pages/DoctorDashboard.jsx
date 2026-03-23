@@ -22,14 +22,32 @@ const WEEKDAY_OPTIONS = [
 const WEEKDAY_LABELS = Object.fromEntries(
   WEEKDAY_OPTIONS.map((weekday) => [weekday.value, weekday.label])
 );
-const DEFAULT_AVAILABILITY_FORM = {
-  mode: "DAILY",
-  weekdays: [],
-  startTime: "09:00",
-  endTime: "12:00",
-  breakStartTime: "",
-  breakEndTime: "",
-};
+const DEFAULT_START_TIME = "09:00";
+const DEFAULT_END_TIME = "12:00";
+
+function createWeeklyDayConfig(dayOfWeek, overrides = {}) {
+  return {
+    dayOfWeek,
+    enabled: false,
+    startTime: DEFAULT_START_TIME,
+    endTime: DEFAULT_END_TIME,
+    breakStartTime: "",
+    breakEndTime: "",
+    ...overrides,
+  };
+}
+
+function createDefaultAvailabilityForm() {
+  return {
+    mode: "DAILY",
+    startTime: DEFAULT_START_TIME,
+    endTime: DEFAULT_END_TIME,
+    breakStartTime: "",
+    breakEndTime: "",
+    weeklyDays: WEEKDAY_OPTIONS.map((weekday) => createWeeklyDayConfig(weekday.value)),
+  };
+}
+
 const DEFAULT_DAY_OFF_FORM = {
   date: getTodayDateValue(),
 };
@@ -130,6 +148,23 @@ function normalizeBreakTimes(nextForm) {
   return nextForm;
 }
 
+function updateTimeWindowForm(currentForm, name, value) {
+  let nextForm = { ...currentForm, [name]: value };
+
+  if (name === "startTime" && nextForm.endTime <= value) {
+    nextForm.endTime =
+      TIME_OPTIONS.find((option) => option.value > value)?.value || currentForm.endTime;
+  }
+
+  if (name === "endTime" && nextForm.startTime >= value) {
+    nextForm.startTime =
+      [...TIME_OPTIONS].reverse().find((option) => option.value < value)?.value ||
+      currentForm.startTime;
+  }
+
+  return normalizeBreakTimes(nextForm);
+}
+
 function buildFormFromBlocks(baseForm, blocks) {
   if (blocks.length === 1) {
     return {
@@ -159,70 +194,70 @@ function buildFormFromBlocks(baseForm, blocks) {
 }
 
 function buildFormFromSchedules(scheduleMode, schedules) {
+  const defaultForm = createDefaultAvailabilityForm();
+
   if (!scheduleMode || schedules.length === 0) {
-    return {
-      ...DEFAULT_AVAILABILITY_FORM,
-    };
+    return defaultForm;
   }
 
   if (scheduleMode === "DAILY") {
     return buildFormFromBlocks(
       {
-        ...DEFAULT_AVAILABILITY_FORM,
+        ...defaultForm,
         mode: "DAILY",
       },
       schedules
     );
   }
 
-  const schedulesByDay = WEEKDAY_OPTIONS.map((weekday) => ({
-    value: weekday.value,
-    blocks: schedules
-      .filter((schedule) => schedule.dayOfWeek === weekday.value)
-      .sort((left, right) => left.startTime.localeCompare(right.startTime)),
-  })).filter((entry) => entry.blocks.length > 0);
-
-  if (schedulesByDay.length === 0) {
-    return {
-      ...DEFAULT_AVAILABILITY_FORM,
-      mode: "WEEKLY",
-    };
-  }
-
-  const selectedWeekdays = schedulesByDay.map((entry) => entry.value);
-  const firstPattern = schedulesByDay[0].blocks.map((block) => ({
-    startTime: block.startTime,
-    endTime: block.endTime,
-  }));
-  const hasUniformBlocks = schedulesByDay.every((entry) =>
-    JSON.stringify(
-      entry.blocks.map((block) => ({
-        startTime: block.startTime,
-        endTime: block.endTime,
-      }))
-    ) === JSON.stringify(firstPattern)
-  );
-
-  if (hasUniformBlocks) {
-    return buildFormFromBlocks(
-      {
-        ...DEFAULT_AVAILABILITY_FORM,
-        mode: "WEEKLY",
-        weekdays: selectedWeekdays,
-      },
-      firstPattern
-    );
-  }
-
   return {
-    ...DEFAULT_AVAILABILITY_FORM,
+    ...defaultForm,
     mode: "WEEKLY",
-    weekdays: selectedWeekdays,
+    weeklyDays: WEEKDAY_OPTIONS.map((weekday) => {
+      const blocks = schedules
+        .filter((schedule) => schedule.dayOfWeek === weekday.value)
+        .sort((left, right) => left.startTime.localeCompare(right.startTime));
+
+      if (blocks.length === 0) {
+        return createWeeklyDayConfig(weekday.value);
+      }
+
+      return buildFormFromBlocks(
+        createWeeklyDayConfig(weekday.value, {
+          enabled: true,
+        }),
+        blocks
+      );
+    }),
   };
 }
 
 function formatScheduleDay(schedule) {
   return schedule.mode === "DAILY" ? "Every day" : WEEKDAY_LABELS[schedule.dayOfWeek] || schedule.dayOfWeek;
+}
+
+function buildSchedulePayload(availabilityForm) {
+  if (availabilityForm.mode === "DAILY") {
+    return {
+      mode: "DAILY",
+      startTime: availabilityForm.startTime,
+      endTime: availabilityForm.endTime,
+      breakStartTime: availabilityForm.breakStartTime,
+      breakEndTime: availabilityForm.breakEndTime,
+    };
+  }
+
+  return {
+    mode: "WEEKLY",
+    weeklyDays: availabilityForm.weeklyDays.map((day) => ({
+      dayOfWeek: day.dayOfWeek,
+      enabled: day.enabled,
+      startTime: day.startTime,
+      endTime: day.endTime,
+      breakStartTime: day.breakStartTime,
+      breakEndTime: day.breakEndTime,
+    })),
+  };
 }
 
 function DoctorDashboard() {
@@ -236,7 +271,7 @@ function DoctorDashboard() {
   const [historyAppointments, setHistoryAppointments] = useState([]);
   const [historyPagination, setHistoryPagination] = useState(EMPTY_PAGINATION);
   const [historyFilters, setHistoryFilters] = useState(DEFAULT_HISTORY_FILTERS);
-  const [availabilityForm, setAvailabilityForm] = useState(DEFAULT_AVAILABILITY_FORM);
+  const [availabilityForm, setAvailabilityForm] = useState(createDefaultAvailabilityForm);
   const [dayOffForm, setDayOffForm] = useState(DEFAULT_DAY_OFF_FORM);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
   const [loadingAppointments, setLoadingAppointments] = useState(true);
@@ -350,44 +385,50 @@ function DoctorDashboard() {
 
     setAvailabilityForm((current) => {
       if (name === "mode") {
+        const defaultForm = createDefaultAvailabilityForm();
         return {
-          ...DEFAULT_AVAILABILITY_FORM,
+          ...defaultForm,
           mode: value,
           startTime: current.startTime,
-          endTime:
-            current.endTime > current.startTime ? current.endTime : DEFAULT_AVAILABILITY_FORM.endTime,
+          endTime: current.endTime > current.startTime ? current.endTime : defaultForm.endTime,
+          breakStartTime: current.breakStartTime,
+          breakEndTime: current.breakEndTime,
+          weeklyDays:
+            current.weeklyDays?.map((day) => ({
+              ...day,
+            })) || defaultForm.weeklyDays,
         };
       }
 
-      let nextForm = { ...current, [name]: value };
-
-      if (name === "startTime" && nextForm.endTime <= value) {
-        nextForm.endTime =
-          TIME_OPTIONS.find((option) => option.value > value)?.value || current.endTime;
-      }
-
-      if (name === "endTime" && nextForm.startTime >= value) {
-        nextForm.startTime =
-          [...TIME_OPTIONS].reverse().find((option) => option.value < value)?.value || current.startTime;
-      }
-
-      return normalizeBreakTimes(nextForm);
+      return updateTimeWindowForm(current, name, value);
     });
   }
 
-  function toggleWeekday(weekday) {
+  function toggleWeeklyDay(weekday) {
     setAvailabilityForm((current) => {
-      const weekdays = current.weekdays.includes(weekday)
-        ? current.weekdays.filter((value) => value !== weekday)
-        : WEEKDAY_OPTIONS.map((option) => option.value).filter((value) =>
-            [...current.weekdays, weekday].includes(value)
-          );
-
       return {
         ...current,
-        weekdays,
+        weeklyDays: current.weeklyDays.map((day) =>
+          day.dayOfWeek === weekday
+            ? {
+                ...day,
+                enabled: !day.enabled,
+              }
+            : day
+        ),
       };
     });
+  }
+
+  function handleWeeklyDayFieldChange(dayOfWeek, event) {
+    const { name, value } = event.target;
+
+    setAvailabilityForm((current) => ({
+      ...current,
+      weeklyDays: current.weeklyDays.map((day) =>
+        day.dayOfWeek === dayOfWeek ? updateTimeWindowForm(day, name, value) : day
+      ),
+    }));
   }
 
   function handleHistoryFilterChange(event) {
@@ -409,7 +450,7 @@ function DoctorDashboard() {
     setNotice(null);
 
     try {
-      await doctorApi.createSchedule(auth.token, availabilityForm);
+      await doctorApi.createSchedule(auth.token, buildSchedulePayload(availabilityForm));
       await Promise.all([loadAvailabilityState(), loadAppointmentSections()]);
       setNotice({
         type: "success",
@@ -488,8 +529,8 @@ function DoctorDashboard() {
         <form className="stack gap-sm" onSubmit={handleSaveAvailability}>
           <p className="muted-text">
             Choose one recurring mode at a time. Saving this form replaces the current recurring
-            availability. Daily applies the same blocks every day. Weekly applies the same blocks
-            to the selected weekdays. Breaks still split one window into two blocks.
+            availability. Daily applies the same blocks every day. Weekly lets you turn weekdays
+            on one by one and give each enabled day its own custom timing and break.
           </p>
 
           <label>
@@ -505,93 +546,185 @@ function DoctorDashboard() {
           </label>
 
           {availabilityForm.mode === "WEEKLY" ? (
-            <div>
-              <span className="field-label">Weekdays</span>
-              <div className="chip-row">
-                {WEEKDAY_OPTIONS.map((weekday) => (
-                  <button
-                    key={weekday.value}
-                    type="button"
-                    className={
-                      availabilityForm.weekdays.includes(weekday.value)
-                        ? "secondary-button active chip-button"
-                        : "secondary-button chip-button"
-                    }
-                    onClick={() => toggleWeekday(weekday.value)}
+            <div className="weekly-day-grid">
+              {availabilityForm.weeklyDays.map((day) => {
+                const weeklyEndTimeOptions = TIME_OPTIONS.filter(
+                  (option) => option.value > day.startTime
+                );
+                const weeklyBreakStartOptions = TIME_OPTIONS.filter(
+                  (option) => option.value > day.startTime && option.value < day.endTime
+                );
+                const weeklyBreakEndOptions = TIME_OPTIONS.filter(
+                  (option) =>
+                    Boolean(day.breakStartTime) &&
+                    option.value > day.breakStartTime &&
+                    option.value < day.endTime
+                );
+
+                return (
+                  <div
+                    key={day.dayOfWeek}
+                    className={day.enabled ? "weekly-day-card active" : "weekly-day-card"}
                   >
-                    {weekday.label}
-                  </button>
-                ))}
-              </div>
+                    <div className="weekly-day-header">
+                      <strong>{WEEKDAY_LABELS[day.dayOfWeek]}</strong>
+                      <button
+                        type="button"
+                        className={day.enabled ? "secondary-button active" : "secondary-button"}
+                        onClick={() => toggleWeeklyDay(day.dayOfWeek)}
+                      >
+                        {day.enabled ? "On" : "Off"}
+                      </button>
+                    </div>
+
+                    {day.enabled ? (
+                      <div className="weekly-day-fields">
+                        <label>
+                          Start time
+                          <select
+                            name="startTime"
+                            value={day.startTime}
+                            onChange={(event) => handleWeeklyDayFieldChange(day.dayOfWeek, event)}
+                            required
+                          >
+                            {startTimeOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          End time
+                          <select
+                            name="endTime"
+                            value={day.endTime}
+                            onChange={(event) => handleWeeklyDayFieldChange(day.dayOfWeek, event)}
+                            required
+                          >
+                            {weeklyEndTimeOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          Break start
+                          <select
+                            name="breakStartTime"
+                            value={day.breakStartTime}
+                            onChange={(event) => handleWeeklyDayFieldChange(day.dayOfWeek, event)}
+                          >
+                            <option value="">No break</option>
+                            {weeklyBreakStartOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          Break end
+                          <select
+                            name="breakEndTime"
+                            value={day.breakEndTime}
+                            onChange={(event) => handleWeeklyDayFieldChange(day.dayOfWeek, event)}
+                            disabled={!day.breakStartTime}
+                          >
+                            <option value="">
+                              {day.breakStartTime ? "Select break end" : "Set break start first"}
+                            </option>
+                            {weeklyBreakEndOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ) : (
+                      <p className="muted-text">Turn this day on to set a custom recurring window.</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
 
-          <label>
-            Start time
-            <select
-              name="startTime"
-              value={availabilityForm.startTime}
-              onChange={handleAvailabilityFieldChange}
-              required
-            >
-              {startTimeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {availabilityForm.mode === "DAILY" ? (
+            <>
+              <label>
+                Start time
+                <select
+                  name="startTime"
+                  value={availabilityForm.startTime}
+                  onChange={handleAvailabilityFieldChange}
+                  required
+                >
+                  {startTimeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-          <label>
-            End time
-            <select
-              name="endTime"
-              value={availabilityForm.endTime}
-              onChange={handleAvailabilityFieldChange}
-              required
-            >
-              {endTimeOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <label>
+                End time
+                <select
+                  name="endTime"
+                  value={availabilityForm.endTime}
+                  onChange={handleAvailabilityFieldChange}
+                  required
+                >
+                  {endTimeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-          <label>
-            Break start
-            <select
-              name="breakStartTime"
-              value={availabilityForm.breakStartTime}
-              onChange={handleAvailabilityFieldChange}
-            >
-              <option value="">No break</option>
-              {breakStartOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <label>
+                Break start
+                <select
+                  name="breakStartTime"
+                  value={availabilityForm.breakStartTime}
+                  onChange={handleAvailabilityFieldChange}
+                >
+                  <option value="">No break</option>
+                  {breakStartOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-          <label>
-            Break end
-            <select
-              name="breakEndTime"
-              value={availabilityForm.breakEndTime}
-              onChange={handleAvailabilityFieldChange}
-              disabled={!availabilityForm.breakStartTime}
-            >
-              <option value="">
-                {availabilityForm.breakStartTime ? "Select break end" : "Set break start first"}
-              </option>
-              {breakEndOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <label>
+                Break end
+                <select
+                  name="breakEndTime"
+                  value={availabilityForm.breakEndTime}
+                  onChange={handleAvailabilityFieldChange}
+                  disabled={!availabilityForm.breakStartTime}
+                >
+                  <option value="">
+                    {availabilityForm.breakStartTime ? "Select break end" : "Set break start first"}
+                  </option>
+                  {breakEndOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : null}
 
           <button type="submit" disabled={isSubmittingAvailability}>
             {isSubmittingAvailability ? "Saving..." : "Save recurring availability"}
