@@ -79,6 +79,15 @@ export const doctorApi = {
   deleteSchedule(token, scheduleId) {
     return request(`/doctor/schedules/${scheduleId}`, { method: "DELETE" }, token);
   },
+  listDayOffs(token) {
+    return request("/doctor/day-offs", {}, token);
+  },
+  createDayOff(token, payload) {
+    return request("/doctor/day-offs", { method: "POST", body: payload }, token);
+  },
+  deleteDayOff(token, dayOffId) {
+    return request(`/doctor/day-offs/${dayOffId}`, { method: "DELETE" }, token);
+  },
   listAppointments(token, query = {}) {
     return request(`/doctor/appointments${buildQueryString(query)}`, {}, token);
   },

@@ -16,8 +16,12 @@ Tech stack:
 
 Assumption kept intentionally simple:
 
-- Doctor availability is saved as a default daily availability template that stays active until the doctor changes it
-- Appointment slots are generated in 15-minute intervals from that range
+- Doctor availability is recurring until changed
+- The doctor chooses one recurring mode at a time:
+  - `DAILY`: the same blocks apply every day
+  - `WEEKLY`: the same blocks apply only on selected weekdays
+- Full-day day offs can be added as date-specific overrides
+- Appointment slots are generated in 15-minute intervals from the active recurring blocks
 
 ## Folder Structure
 
@@ -68,8 +72,8 @@ Normalized models:
 
 - `User`: shared identity table for PATIENT, DOCTOR, ADMIN
 - `Doctor`: one-to-one extension of `User` for doctor-specific data
-- `Schedule`: legacy date-based availability blocks retained for compatibility
-- `DoctorAvailability`: doctor default daily availability blocks
+- `DoctorAvailability`: doctor recurring availability blocks with `DAILY` or `WEEKLY` mode
+- `DoctorDayOff`: doctor full-day date override for a specific day off
 - `Appointment`: patient bookings against doctors for a specific date and time
 
 Important data rules:
@@ -80,7 +84,7 @@ Important data rules:
 - double booking is blocked in two layers:
   - service-level booking validation
   - database-level partial unique index in `migration.sql` for active doctor/date/time bookings
-- a patient can hold only one active `BOOKED` appointment per date and must cancel it before booking another on that same day
+- a patient can hold only one appointment per date, and a booked same-day appointment must be cancelled before another one can be booked
 
 ## Environment Setup
 
@@ -143,21 +147,24 @@ Admin:
 - `GET /admin/doctors` - list doctors
 - `POST /admin/doctors` - create doctor account
 - `PUT /admin/doctors/:id` - update doctor account details
-- `DELETE /admin/doctors/:id` - delete doctor account, schedules, and linked appointments
+- `DELETE /admin/doctors/:id` - delete doctor account, recurring availability, day offs, and linked appointments
 
 Doctor:
 
-- `GET /doctor/schedules` - list own schedule blocks
-- `POST /doctor/schedules` - create availability block
-- `DELETE /doctor/schedules/:id` - remove availability block if no booked slot exists inside it
+- `GET /doctor/schedules` - list recurring availability blocks and the active mode
+- `POST /doctor/schedules` - replace recurring availability with the submitted daily or weekly setup
+- `DELETE /doctor/schedules/:id` - remove one recurring availability block if no booked slot depends on it
+- `GET /doctor/day-offs` - list future day offs
+- `POST /doctor/day-offs` - add a full-day override for one date
+- `DELETE /doctor/day-offs/:id` - remove a day off
 - `GET /doctor/appointments` - list own appointments
 
 Patient:
 
 - `GET /patient/doctors` - list doctors
-- `GET /patient/doctors/:doctorId/slots?date=YYYY-MM-DD` - list open slots for a doctor on a date, limited to today or tomorrow
+- `GET /patient/doctors/:doctorId/slots?date=YYYY-MM-DD` - list open slots for a doctor on today or a future date based on recurring availability, day offs, existing bookings, and passed time for today
 - `GET /patient/appointments` - list own appointments
-- `POST /patient/appointments` - book appointment for today or tomorrow if the patient has no other active booked appointment on the same date
+- `POST /patient/appointments` - book an appointment on today or a future date if the patient has no other appointment on that same date
 - `PATCH /patient/appointments/:id/cancel` - cancel own appointment
 
 ## Frontend Pages
@@ -174,9 +181,9 @@ Role-based routing is enforced on the client and the server.
 
 - The system stays within the requested scope and does not include multi-tenant logic or external auth
 - Booking is auto-confirmed immediately after validation
-- A patient can have only one active booked appointment per day
+- A patient can have only one appointment per day
 - Doctors are created by admins only
-- Admin doctor deletion removes the doctor's schedules and appointments through database cascades
+- Admin doctor deletion removes the doctor's recurring availability, day offs, and appointments through database cascades
 
 ## Deployment
 
@@ -185,6 +192,12 @@ Recommended split:
 - Frontend on `Vercel`
 - Backend on `Render`
 - Database on `Supabase`
+
+Live URLs:
+
+- Frontend: `https://frontendojtsem2.vercel.app`
+- Backend: `https://ojt-sem2.onrender.com`
+- Backend health: `https://ojt-sem2.onrender.com/api/health`
 
 ### Frontend on Vercel
 
@@ -198,12 +211,13 @@ Project settings:
 
 Environment variables:
 
-- `VITE_API_URL=https://your-backend.onrender.com/api`
+- `VITE_API_URL=https://ojt-sem2.onrender.com/api`
 
 Notes:
 
 - `frontend/vercel.json` is included so React Router routes rewrite to `index.html`
 - after your backend is live on Render, redeploy the frontend with the final backend URL
+- live frontend URL: `https://frontendojtsem2.vercel.app`
 
 ### Backend on Render
 
@@ -220,7 +234,7 @@ Environment variables:
 - `DIRECT_URL` = Supabase direct connection string
 - `JWT_SECRET` = strong random secret
 - `PORT` = leave blank or set by Render automatically
-- `CLIENT_URLS` = `https://your-frontend.vercel.app`
+- `CLIENT_URLS` = `https://frontendojtsem2.vercel.app`
 - `SLOT_INTERVAL_MINUTES` = `15`
 - `ADMIN_NAME` = your admin display name
 - `ADMIN_EMAIL` = admin login email
@@ -231,3 +245,4 @@ Notes:
 - `backend/package.json` includes `postinstall: prisma generate`, so Prisma Client is generated during Render install
 - `npm run prisma:deploy` applies Prisma migrations during the Render build
 - if you later add a custom frontend domain, also add it to `CLIENT_URLS`
+- live backend URL: `https://ojt-sem2.onrender.com`

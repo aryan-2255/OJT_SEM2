@@ -23,9 +23,18 @@ function serializeSchedule(schedule) {
   return {
     id: schedule.id,
     doctorId: schedule.doctorId,
-    ...(schedule.date ? { date: formatDateOnly(schedule.date) } : {}),
+    mode: schedule.mode,
+    dayOfWeek: schedule.dayOfWeek,
     startTime: schedule.startTime,
     endTime: schedule.endTime,
+  };
+}
+
+function serializeDayOff(dayOff) {
+  return {
+    id: dayOff.id,
+    doctorId: dayOff.doctorId,
+    date: formatDateOnly(dayOff.date),
   };
 }
 
@@ -61,6 +70,7 @@ function serializeDoctorAppointment(appointment) {
 module.exports = {
   serializeAuthUser,
   serializeDoctor,
+  serializeDayOff,
   serializeDoctorAppointment,
   serializePatientAppointment,
   serializeSchedule,

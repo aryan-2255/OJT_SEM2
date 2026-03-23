@@ -4,7 +4,7 @@ import SectionCard from "../components/SectionCard";
 import StatusMessage from "../components/StatusMessage";
 import { useAuth } from "../context/AuthContext";
 import { patientApi } from "../services/api";
-import { getTodayDateValue, getTomorrowDateValue } from "../services/date";
+import { getTodayDateValue } from "../services/date";
 import { formatTimeLabel } from "../services/time";
 
 const SLOT_REFRESH_INTERVAL_MS = 15000;
@@ -102,7 +102,6 @@ function buildHistoryQuery(filters) {
 
 function PatientDashboard() {
   const { auth } = useAuth();
-  const lastBookableDate = getTomorrowDateValue();
   const [doctors, setDoctors] = useState([]);
   const [todayAppointments, setTodayAppointments] = useState([]);
   const [upcomingAppointments, setUpcomingAppointments] = useState([]);
@@ -397,7 +396,10 @@ function PatientDashboard() {
             <div className="notice notice-info">{getDailyLimitMessage(selectedDateBookedAppointment)}</div>
           ) : null}
 
-          <p className="muted-text">All appointment times are shown in AM/PM. Patients can book only for today or tomorrow.</p>
+          <p className="muted-text">
+            All appointment times are shown in AM/PM. Slots follow the doctor&apos;s active daily
+            or weekly availability and automatically respect full-day day offs.
+          </p>
 
           <label>
             Appointment date
@@ -405,7 +407,6 @@ function PatientDashboard() {
               type="date"
               value={selectedDate}
               min={getTodayDateValue()}
-              max={lastBookableDate}
               onChange={(event) => setSelectedDate(event.target.value)}
             />
           </label>

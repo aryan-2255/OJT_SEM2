@@ -2,18 +2,33 @@ const asyncHandler = require("../utils/asyncHandler");
 const doctorService = require("../services/doctorService");
 
 const listSchedules = asyncHandler(async (req, res) => {
-  const schedules = await doctorService.listSchedules(req.user.id);
-  res.status(200).json({ schedules });
+  const result = await doctorService.listSchedules(req.user.id);
+  res.status(200).json(result);
 });
 
 const createSchedule = asyncHandler(async (req, res) => {
-  const schedules = await doctorService.createSchedule(req.user.id, req.body);
-  res.status(201).json({ schedules });
+  const result = await doctorService.createSchedule(req.user.id, req.body);
+  res.status(201).json(result);
 });
 
 const deleteSchedule = asyncHandler(async (req, res) => {
-  const schedule = await doctorService.deleteSchedule(req.user.id, req.params.id);
-  res.status(200).json({ schedule });
+  const result = await doctorService.deleteSchedule(req.user.id, req.params.id);
+  res.status(200).json(result);
+});
+
+const listDayOffs = asyncHandler(async (req, res) => {
+  const result = await doctorService.listDayOffs(req.user.id);
+  res.status(200).json(result);
+});
+
+const createDayOff = asyncHandler(async (req, res) => {
+  const dayOff = await doctorService.createDayOff(req.user.id, req.body);
+  res.status(201).json({ dayOff });
+});
+
+const deleteDayOff = asyncHandler(async (req, res) => {
+  const dayOff = await doctorService.deleteDayOff(req.user.id, req.params.id);
+  res.status(200).json({ dayOff });
 });
 
 const listAppointments = asyncHandler(async (req, res) => {
@@ -22,8 +37,11 @@ const listAppointments = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  createDayOff,
   createSchedule,
+  deleteDayOff,
   deleteSchedule,
   listAppointments,
+  listDayOffs,
   listSchedules,
 };

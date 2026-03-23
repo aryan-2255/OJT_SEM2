@@ -5,11 +5,13 @@ const { syncCompletedAppointments } = require("./appointmentStatusService");
 const { buildAppointmentFilters, buildPaginationMeta } = require("../utils/appointmentQuery");
 const httpError = require("../utils/httpError");
 const {
+  getAvailabilityRowsForDate,
+} = require("../utils/availability");
+const {
   serializeDoctor,
   serializePatientAppointment,
 } = require("../utils/serializers");
 const {
-  addDaysToDateOnly,
   filterPastSlotsForDate,
   formatDateOnly,
   formatDisplayTime,
@@ -28,29 +30,6 @@ function parseDoctorId(doctorId) {
   }
 
   return parsedDoctorId;
-}
-
-function getBookingWindow() {
-  const today = toDateOnly(formatLocalDateOnly(new Date()));
-  const tomorrow = addDaysToDateOnly(today, 1);
-  return { today, tomorrow };
-}
-
-function assertWithinBookingWindow(dateOnly, actionLabel) {
-  const { today, tomorrow } = getBookingWindow();
-
-  if (dateOnly < today) {
-    throw httpError(400, `Cannot ${actionLabel} for a past date.`);
-  }
-
-  if (dateOnly > tomorrow) {
-    throw httpError(
-      400,
-      actionLabel === "view slots"
-        ? "Slots can only be viewed for today or tomorrow."
-        : "Appointments can only be booked for today or tomorrow."
-    );
-  }
 }
 
 async function findDoctorOrThrow(doctorId) {
@@ -76,28 +55,32 @@ async function findDoctorOrThrow(doctorId) {
 }
 
 async function loadAvailabilityBlocks(client, doctorId, dateOnly) {
-  const recurringBlocks = await client.doctorAvailability.findMany({
-    where: {
-      doctorId,
-    },
-    orderBy: {
-      startTime: "asc",
-    },
-  });
+  const [dayOff, recurringRows] = await Promise.all([
+    client.doctorDayOff.findUnique({
+      where: {
+        doctorId_date: {
+          doctorId,
+          date: dateOnly,
+        },
+      },
+    }),
+    client.doctorAvailability.findMany({
+      where: {
+        doctorId,
+      },
+      orderBy: [
+        { mode: "asc" },
+        { dayOfWeek: "asc" },
+        { startTime: "asc" },
+      ],
+    }),
+  ]);
 
-  if (recurringBlocks.length > 0) {
-    return recurringBlocks;
+  if (dayOff) {
+    return [];
   }
 
-  return client.schedule.findMany({
-    where: {
-      doctorId,
-      date: dateOnly,
-    },
-    orderBy: {
-      startTime: "asc",
-    },
-  });
+  return getAvailabilityRowsForDate(recurringRows, dateOnly);
 }
 
 function buildOpenSlots(blocks, date, bookedTimes) {
@@ -146,7 +129,10 @@ async function getAvailableSlots(doctorId, date) {
 
   const doctor = await findDoctorOrThrow(parsedDoctorId);
   const dateOnly = toDateOnly(date);
-  assertWithinBookingWindow(dateOnly, "view slots");
+
+  if (dateOnly < toDateOnly(formatLocalDateOnly(new Date()))) {
+    throw httpError(400, "Cannot view slots for a past date.");
+  }
 
   const [blocks, appointments] = await Promise.all([
     loadAvailabilityBlocks(prisma, parsedDoctorId, dateOnly),
@@ -226,7 +212,10 @@ async function bookAppointment(userId, payload) {
   }
 
   const dateOnly = toDateOnly(payload.date);
-  assertWithinBookingWindow(dateOnly, "book appointments");
+
+  if (dateOnly < toDateOnly(formatLocalDateOnly(new Date()))) {
+    throw httpError(400, "Appointments can only be booked for today or a future date.");
+  }
 
   const appointment = await prisma.$transaction(
     async (transaction) => {

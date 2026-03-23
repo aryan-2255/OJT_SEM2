@@ -1,10 +1,18 @@
-const { AppointmentStatus } = require("@prisma/client");
+const { AppointmentStatus, AvailabilityMode } = require("@prisma/client");
 const env = require("../config/env");
 const prisma = require("../lib/prisma");
 const { syncCompletedAppointments } = require("./appointmentStatusService");
 const { buildAppointmentFilters, buildPaginationMeta } = require("../utils/appointmentQuery");
 const httpError = require("../utils/httpError");
 const {
+  buildAvailabilityRows,
+  buildDayOffDateSet,
+  getActiveAvailabilityMode,
+  isAppointmentCoveredByAvailability,
+  normalizeWeekdays,
+} = require("../utils/availability");
+const {
+  serializeDayOff,
   serializeDoctorAppointment,
   serializeSchedule,
 } = require("../utils/serializers");
@@ -14,6 +22,7 @@ const {
   formatDisplayTime,
   formatLocalDateOnly,
   generateSlots,
+  isValidDateString,
   isValidTimeString,
   timeToMinutes,
   toDateOnly,
@@ -31,20 +40,6 @@ async function resolveDoctor(userId) {
   }
 
   return doctor;
-}
-
-function validateSchedulePayload({ startTime, endTime }) {
-  if (!isValidTimeString(startTime) || !isValidTimeString(endTime)) {
-    throw httpError(400, "Invalid schedule time selected.");
-  }
-
-  if (!ensureStartBeforeEnd(startTime, endTime)) {
-    throw httpError(400, "Schedule end time must be after start time.");
-  }
-
-  if (generateSlots(startTime, endTime, env.slotIntervalMinutes).length === 0) {
-    throw httpError(400, `Schedule must allow at least one ${env.slotIntervalMinutes}-minute slot.`);
-  }
 }
 
 function buildScheduleBlocks({ startTime, endTime, breakStartTime, breakEndTime }) {
@@ -96,23 +91,85 @@ function buildScheduleBlocks({ startTime, endTime, breakStartTime, breakEndTime 
   return scheduleBlocks;
 }
 
-function isTimeInsideBlock(time, block) {
-  const appointmentMinutes = timeToMinutes(time);
-  return (
-    appointmentMinutes >= timeToMinutes(block.startTime) &&
-    appointmentMinutes < timeToMinutes(block.endTime)
-  );
+function parseSchedulePayload(payload) {
+  const mode = typeof payload.mode === "string" ? payload.mode.trim().toUpperCase() : "";
+
+  if (!Object.values(AvailabilityMode).includes(mode)) {
+    throw httpError(400, "Select a valid availability mode.");
+  }
+
+  if (!isValidTimeString(payload.startTime) || !isValidTimeString(payload.endTime)) {
+    throw httpError(400, "Invalid schedule time selected.");
+  }
+
+  if (!ensureStartBeforeEnd(payload.startTime, payload.endTime)) {
+    throw httpError(400, "Schedule end time must be after start time.");
+  }
+
+  if (
+    generateSlots(payload.startTime, payload.endTime, env.slotIntervalMinutes).length === 0
+  ) {
+    throw httpError(400, `Schedule must allow at least one ${env.slotIntervalMinutes}-minute slot.`);
+  }
+
+  const weekdays = mode === AvailabilityMode.WEEKLY ? normalizeWeekdays(payload.weekdays) : [];
+  const scheduleBlocks = buildScheduleBlocks(payload);
+
+  return {
+    mode,
+    weekdays,
+    scheduleBlocks,
+  };
 }
 
-async function ensureScheduleChangePreservesBookedAppointments(doctorId, scheduleBlocks) {
+function getTodayDateOnly() {
+  return toDateOnly(formatLocalDateOnly(new Date()));
+}
+
+async function loadAvailabilityRows(client, doctorId) {
+  return client.doctorAvailability.findMany({
+    where: {
+      doctorId,
+    },
+    orderBy: [
+      { mode: "asc" },
+      { dayOfWeek: "asc" },
+      { startTime: "asc" },
+    ],
+  });
+}
+
+async function loadDayOffRows(client, doctorId, fromDate = null) {
+  return client.doctorDayOff.findMany({
+    where: {
+      doctorId,
+      ...(fromDate
+        ? {
+            date: {
+              gte: fromDate,
+            },
+          }
+        : {}),
+    },
+    orderBy: {
+      date: "asc",
+    },
+  });
+}
+
+async function ensureAvailabilityPreservesBookedAppointments(
+  doctorId,
+  availabilityRows,
+  dayOffDateSet,
+  client = prisma
+) {
   await syncCompletedAppointments();
 
-  const today = toDateOnly(formatLocalDateOnly(new Date()));
-  const activeAppointments = await prisma.appointment.findMany({
+  const activeAppointments = await client.appointment.findMany({
     where: {
       doctorId,
       date: {
-        gte: today,
+        gte: getTodayDateOnly(),
       },
       status: AppointmentStatus.BOOKED,
     },
@@ -127,39 +184,40 @@ async function ensureScheduleChangePreservesBookedAppointments(doctorId, schedul
   });
 
   const conflictingAppointment = activeAppointments.find(
-    (appointment) => !scheduleBlocks.some((block) => isTimeInsideBlock(appointment.time, block))
+    (appointment) =>
+      !isAppointmentCoveredByAvailability(appointment, availabilityRows, dayOffDateSet)
   );
 
   if (conflictingAppointment) {
     throw httpError(
       409,
-      `Cannot update daily availability because ${formatDateOnly(conflictingAppointment.date)} at ${formatDisplayTime(conflictingAppointment.time)} is already booked.`
+      `Cannot update availability because ${formatDateOnly(conflictingAppointment.date)} at ${formatDisplayTime(conflictingAppointment.time)} is already booked.`
     );
   }
 }
 
 async function listSchedules(userId) {
   const doctor = await resolveDoctor(userId);
+  const schedules = await loadAvailabilityRows(prisma, doctor.id);
 
-  const schedules = await prisma.doctorAvailability.findMany({
-    where: {
-      doctorId: doctor.id,
-    },
-    orderBy: {
-      startTime: "asc",
-    },
-  });
-
-  return schedules.map(serializeSchedule);
+  return {
+    scheduleMode: getActiveAvailabilityMode(schedules),
+    schedules: schedules.map(serializeSchedule),
+  };
 }
 
 async function createSchedule(userId, payload) {
-  validateSchedulePayload(payload);
-
   const doctor = await resolveDoctor(userId);
-  const scheduleBlocks = buildScheduleBlocks(payload);
+  const { mode, weekdays, scheduleBlocks } = parseSchedulePayload(payload);
+  const currentDayOffs = await loadDayOffRows(prisma, doctor.id, getTodayDateOnly());
 
-  await ensureScheduleChangePreservesBookedAppointments(doctor.id, scheduleBlocks);
+  const rowsToCreate = buildAvailabilityRows(doctor.id, mode, scheduleBlocks, weekdays);
+
+  await ensureAvailabilityPreservesBookedAppointments(
+    doctor.id,
+    rowsToCreate,
+    buildDayOffDateSet(currentDayOffs)
+  );
 
   const schedules = await prisma.$transaction(async (transaction) => {
     await transaction.doctorAvailability.deleteMany({
@@ -169,24 +227,16 @@ async function createSchedule(userId, payload) {
     });
 
     await transaction.doctorAvailability.createMany({
-      data: scheduleBlocks.map((block) => ({
-        doctorId: doctor.id,
-        startTime: block.startTime,
-        endTime: block.endTime,
-      })),
+      data: rowsToCreate,
     });
 
-    return transaction.doctorAvailability.findMany({
-      where: {
-        doctorId: doctor.id,
-      },
-      orderBy: {
-        startTime: "asc",
-      },
-    });
+    return loadAvailabilityRows(transaction, doctor.id);
   });
 
-  return schedules.map(serializeSchedule);
+  return {
+    scheduleMode: getActiveAvailabilityMode(schedules),
+    schedules: schedules.map(serializeSchedule),
+  };
 }
 
 async function deleteSchedule(userId, scheduleId) {
@@ -197,44 +247,28 @@ async function deleteSchedule(userId, scheduleId) {
   }
 
   const doctor = await resolveDoctor(userId);
-
-  const schedule = await prisma.doctorAvailability.findFirst({
-    where: {
-      id: parsedScheduleId,
-      doctorId: doctor.id,
-    },
-  });
+  const [schedule, currentRows, currentDayOffs] = await Promise.all([
+    prisma.doctorAvailability.findFirst({
+      where: {
+        id: parsedScheduleId,
+        doctorId: doctor.id,
+      },
+    }),
+    loadAvailabilityRows(prisma, doctor.id),
+    loadDayOffRows(prisma, doctor.id, getTodayDateOnly()),
+  ]);
 
   if (!schedule) {
     throw httpError(404, "Schedule not found.");
   }
 
-  await syncCompletedAppointments();
+  const nextRows = currentRows.filter((row) => row.id !== parsedScheduleId);
 
-  const activeAppointment = await prisma.appointment.findFirst({
-    where: {
-      doctorId: doctor.id,
-      date: {
-        gte: toDateOnly(formatLocalDateOnly(new Date())),
-      },
-      time: {
-        gte: schedule.startTime,
-        lt: schedule.endTime,
-      },
-      status: AppointmentStatus.BOOKED,
-    },
-    orderBy: [
-      { date: "asc" },
-      { time: "asc" },
-    ],
-  });
-
-  if (activeAppointment) {
-    throw httpError(
-      409,
-      "Cannot delete an availability block that still has active booked appointments."
-    );
-  }
+  await ensureAvailabilityPreservesBookedAppointments(
+    doctor.id,
+    nextRows,
+    buildDayOffDateSet(currentDayOffs)
+  );
 
   await prisma.doctorAvailability.delete({
     where: {
@@ -242,7 +276,100 @@ async function deleteSchedule(userId, scheduleId) {
     },
   });
 
-  return serializeSchedule(schedule);
+  return {
+    schedule: serializeSchedule(schedule),
+    scheduleMode: getActiveAvailabilityMode(nextRows),
+  };
+}
+
+async function listDayOffs(userId) {
+  const doctor = await resolveDoctor(userId);
+  const dayOffs = await loadDayOffRows(prisma, doctor.id, getTodayDateOnly());
+
+  return {
+    dayOffs: dayOffs.map(serializeDayOff),
+  };
+}
+
+async function createDayOff(userId, payload) {
+  if (!isValidDateString(payload.date)) {
+    throw httpError(400, "Date must be in YYYY-MM-DD format.");
+  }
+
+  const date = toDateOnly(payload.date);
+  const today = getTodayDateOnly();
+
+  if (date < today) {
+    throw httpError(400, "Day off can only be added for today or a future date.");
+  }
+
+  const doctor = await resolveDoctor(userId);
+
+  await syncCompletedAppointments();
+
+  const activeAppointment = await prisma.appointment.findFirst({
+    where: {
+      doctorId: doctor.id,
+      date,
+      status: AppointmentStatus.BOOKED,
+    },
+    orderBy: {
+      time: "asc",
+    },
+  });
+
+  if (activeAppointment) {
+    throw httpError(
+      409,
+      `Cannot mark ${payload.date} as a day off because ${formatDisplayTime(activeAppointment.time)} is already booked.`
+    );
+  }
+
+  try {
+    const dayOff = await prisma.doctorDayOff.create({
+      data: {
+        doctorId: doctor.id,
+        date,
+      },
+    });
+
+    return serializeDayOff(dayOff);
+  } catch (error) {
+    if (error?.code === "P2002") {
+      throw httpError(409, "A day off already exists for this date.");
+    }
+
+    throw error;
+  }
+}
+
+async function deleteDayOff(userId, dayOffId) {
+  const parsedDayOffId = Number(dayOffId);
+
+  if (Number.isNaN(parsedDayOffId)) {
+    throw httpError(400, "Day off id must be a number.");
+  }
+
+  const doctor = await resolveDoctor(userId);
+
+  const dayOff = await prisma.doctorDayOff.findFirst({
+    where: {
+      id: parsedDayOffId,
+      doctorId: doctor.id,
+    },
+  });
+
+  if (!dayOff) {
+    throw httpError(404, "Day off not found.");
+  }
+
+  await prisma.doctorDayOff.delete({
+    where: {
+      id: parsedDayOffId,
+    },
+  });
+
+  return serializeDayOff(dayOff);
 }
 
 async function listAppointments(userId, query) {
@@ -285,8 +412,11 @@ async function listAppointments(userId, query) {
 }
 
 module.exports = {
+  createDayOff,
   createSchedule,
+  deleteDayOff,
   deleteSchedule,
   listAppointments,
+  listDayOffs,
   listSchedules,
 };

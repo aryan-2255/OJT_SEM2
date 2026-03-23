@@ -315,6 +315,26 @@ a {
   gap: 0.75rem;
 }
 
+.top-gap {
+  margin-top: 1rem;
+}
+
+.field-label {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.chip-button {
+  min-width: 0;
+  padding-inline: 0.9rem;
+}
+
 .filter-row {
   display: flex;
   flex-wrap: wrap;

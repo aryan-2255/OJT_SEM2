@@ -17,12 +17,6 @@ function toDateOnly(value) {
   return new Date(`${value}T00:00:00.000Z`);
 }
 
-function addDaysToDateOnly(value, days) {
-  const nextValue = new Date(value);
-  nextValue.setUTCDate(nextValue.getUTCDate() + days);
-  return nextValue;
-}
-
 function formatDateOnly(value) {
   return value.toISOString().split("T")[0];
 }
@@ -56,10 +50,6 @@ function ensureStartBeforeEnd(startTime, endTime) {
   return timeToMinutes(startTime) < timeToMinutes(endTime);
 }
 
-function timesOverlap(startA, endA, startB, endB) {
-  return timeToMinutes(startA) < timeToMinutes(endB) && timeToMinutes(startB) < timeToMinutes(endA);
-}
-
 function generateSlots(startTime, endTime, intervalMinutes) {
   const slots = [];
   let current = timeToMinutes(startTime);
@@ -84,7 +74,6 @@ function filterPastSlotsForDate(date, slots, now = new Date()) {
 }
 
 module.exports = {
-  addDaysToDateOnly,
   ensureStartBeforeEnd,
   formatDateOnly,
   formatDisplayTime,
@@ -95,6 +84,5 @@ module.exports = {
   isValidTimeString,
   minutesToTime,
   timeToMinutes,
-  timesOverlap,
   toDateOnly,
 };
