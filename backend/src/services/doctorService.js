@@ -260,19 +260,18 @@ async function createSchedule(userId, payload) {
     buildDayOffDateSet(currentDayOffs)
   );
 
-  const schedules = await prisma.$transaction(async (transaction) => {
-    await transaction.doctorAvailability.deleteMany({
+  await prisma.$transaction([
+    prisma.doctorAvailability.deleteMany({
       where: {
         doctorId: doctor.id,
       },
-    });
-
-    await transaction.doctorAvailability.createMany({
+    }),
+    prisma.doctorAvailability.createMany({
       data: rowsToCreate,
-    });
+    }),
+  ]);
 
-    return loadAvailabilityRows(transaction, doctor.id);
-  });
+  const schedules = await loadAvailabilityRows(prisma, doctor.id);
 
   return {
     scheduleMode: getActiveAvailabilityMode(schedules),

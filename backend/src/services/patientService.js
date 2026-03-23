@@ -1,4 +1,4 @@
-const { AppointmentStatus, Prisma } = require("@prisma/client");
+const { AppointmentStatus } = require("@prisma/client");
 const env = require("../config/env");
 const prisma = require("../lib/prisma");
 const { syncCompletedAppointments } = require("./appointmentStatusService");
@@ -217,105 +217,131 @@ async function bookAppointment(userId, payload) {
     throw httpError(400, "Appointments can only be booked for today or a future date.");
   }
 
-  const appointment = await prisma.$transaction(
-    async (transaction) => {
-      const existingBookedAppointment = await transaction.appointment.findFirst({
-        where: {
-          patientId: userId,
-          date: dateOnly,
-          status: {
-            in: [AppointmentStatus.BOOKED, AppointmentStatus.COMPLETED],
-          },
-        },
-        include: {
-          doctor: {
-            include: {
-              user: {
-                select: {
-                  name: true,
-                },
-              },
-            },
-          },
-        },
-      });
-
-      if (existingBookedAppointment) {
-        throw httpError(
-          409,
-          `Only one appointment per day is allowed. You already have an appointment with ${existingBookedAppointment.doctor.user.name} on ${formatDateOnly(existingBookedAppointment.date)} at ${formatDisplayTime(existingBookedAppointment.time)}.`
-        );
-      }
-
-      const doctor = await transaction.doctor.findUnique({
-        where: {
-          id: parsedDoctorId,
-        },
+  const existingBookedAppointment = await prisma.appointment.findFirst({
+    where: {
+      patientId: userId,
+      date: dateOnly,
+      status: {
+        in: [AppointmentStatus.BOOKED, AppointmentStatus.COMPLETED],
+      },
+    },
+    include: {
+      doctor: {
         include: {
           user: {
             select: {
               name: true,
-              email: true,
             },
           },
         },
-      });
+      },
+    },
+  });
 
-      if (!doctor) {
-        throw httpError(404, "Doctor not found.");
-      }
+  if (existingBookedAppointment) {
+    throw httpError(
+      409,
+      `Only one appointment per day is allowed. You already have an appointment with ${existingBookedAppointment.doctor.user.name} on ${formatDateOnly(existingBookedAppointment.date)} at ${formatDisplayTime(existingBookedAppointment.time)}.`
+    );
+  }
 
-      const blocks = await loadAvailabilityBlocks(transaction, parsedDoctorId, dateOnly);
-      const availableSlots = new Set(buildOpenSlots(blocks, payload.date, new Set()));
-
-      if (!availableSlots.has(payload.time)) {
-        throw httpError(
-          400,
-          "Selected time is no longer available or is not part of the doctor's active schedule."
-        );
-      }
-
-      const existingAppointment = await transaction.appointment.findFirst({
-        where: {
-          doctorId: parsedDoctorId,
-          date: dateOnly,
-          time: payload.time,
-          status: {
-            in: [AppointmentStatus.BOOKED, AppointmentStatus.COMPLETED],
-          },
+  const doctor = await prisma.doctor.findUnique({
+    where: {
+      id: parsedDoctorId,
+    },
+    include: {
+      user: {
+        select: {
+          name: true,
+          email: true,
         },
-      });
+      },
+    },
+  });
 
-      if (existingAppointment) {
-        throw httpError(409, "This slot has already been booked.");
-      }
+  if (!doctor) {
+    throw httpError(404, "Doctor not found.");
+  }
 
-      return transaction.appointment.create({
-        data: {
-          patientId: userId,
-          doctorId: parsedDoctorId,
-          date: dateOnly,
-          time: payload.time,
-          status: AppointmentStatus.BOOKED,
-        },
-        include: {
-          doctor: {
-            include: {
-              user: {
-                select: {
-                  name: true,
-                  email: true,
-                },
+  const blocks = await loadAvailabilityBlocks(prisma, parsedDoctorId, dateOnly);
+  const availableSlots = new Set(buildOpenSlots(blocks, payload.date, new Set()));
+
+  if (!availableSlots.has(payload.time)) {
+    throw httpError(
+      400,
+      "Selected time is no longer available or is not part of the doctor's active schedule."
+    );
+  }
+
+  let appointment;
+
+  try {
+    appointment = await prisma.appointment.create({
+      data: {
+        patientId: userId,
+        doctorId: parsedDoctorId,
+        date: dateOnly,
+        time: payload.time,
+        status: AppointmentStatus.BOOKED,
+      },
+      include: {
+        doctor: {
+          include: {
+            user: {
+              select: {
+                name: true,
+                email: true,
               },
             },
           },
         },
-      });
-    },
-    {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    });
+  } catch (error) {
+    if (error.code === "P2002") {
+      const [patientConflict, slotConflict] = await Promise.all([
+        prisma.appointment.findFirst({
+          where: {
+            patientId: userId,
+            date: dateOnly,
+            status: AppointmentStatus.BOOKED,
+          },
+          include: {
+            doctor: {
+              include: {
+                user: {
+                  select: {
+                    name: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        prisma.appointment.findFirst({
+          where: {
+            doctorId: parsedDoctorId,
+            date: dateOnly,
+            time: payload.time,
+            status: AppointmentStatus.BOOKED,
+          },
+        }),
+      ]);
+
+      if (patientConflict) {
+        throw httpError(
+          409,
+          `Only one appointment per day is allowed. You already have an appointment with ${patientConflict.doctor.user.name} on ${formatDateOnly(patientConflict.date)} at ${formatDisplayTime(patientConflict.time)}.`
+        );
+      }
+
+      if (slotConflict) {
+        throw httpError(409, "This slot has already been booked.");
+      }
     }
-  );
+
+    throw error;
+  }
 
   return serializePatientAppointment(appointment);
 }

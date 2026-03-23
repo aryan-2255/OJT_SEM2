@@ -7,13 +7,19 @@ function notFound(req, res, next) {
 function errorHandler(error, req, res, next) {
   const statusCode =
     error.statusCode ||
-    (error.code === "P2002" ? 409 : error.code === "P2034" ? 409 : 500);
+    (error.code === "P2002" || error.code === "P2034"
+      ? 409
+      : error.code === "P2028"
+        ? 503
+        : 500);
 
   const message =
     error.code === "P2002"
       ? "A record with the same unique value already exists."
       : error.code === "P2034"
         ? "This action conflicted with another transaction. Please try again."
+        : error.code === "P2028"
+          ? "The database could not complete the request. Please try again."
         : error.message || "Internal server error.";
 
   res.status(statusCode).json({
@@ -25,4 +31,3 @@ module.exports = {
   errorHandler,
   notFound,
 };
-

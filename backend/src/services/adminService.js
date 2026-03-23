@@ -103,30 +103,26 @@ async function createDoctor(payload) {
 
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  const doctor = await prisma.$transaction(async (transaction) => {
-    const user = await transaction.user.create({
-      data: {
-        name: payload.name.trim(),
-        email,
-        password: hashedPassword,
-        role: Role.DOCTOR,
-      },
-    });
-
-    return transaction.doctor.create({
-      data: {
-        userId: user.id,
-        specialization: payload.specialization?.trim() || null,
-      },
-      include: {
-        user: {
-          select: {
-            name: true,
-            email: true,
-          },
+  const doctor = await prisma.doctor.create({
+    data: {
+      specialization: payload.specialization?.trim() || null,
+      user: {
+        create: {
+          name: payload.name.trim(),
+          email,
+          password: hashedPassword,
+          role: Role.DOCTOR,
         },
       },
-    });
+    },
+    include: {
+      user: {
+        select: {
+          name: true,
+          email: true,
+        },
+      },
+    },
   });
 
   return serializeDoctor(doctor);
@@ -152,39 +148,33 @@ async function updateDoctor(doctorId, payload) {
     throw httpError(409, "An account with this email already exists.");
   }
 
-  const updatedDoctor = await prisma.$transaction(async (transaction) => {
-    const userData = {
-      name: payload.name.trim(),
-      email,
-    };
+  const userData = {
+    name: payload.name.trim(),
+    email,
+  };
 
-    if (password) {
-      userData.password = await bcrypt.hash(password, 10);
-    }
+  if (password) {
+    userData.password = await bcrypt.hash(password, 10);
+  }
 
-    await transaction.user.update({
-      where: {
-        id: doctor.userId,
+  const updatedDoctor = await prisma.doctor.update({
+    where: {
+      id: parsedDoctorId,
+    },
+    data: {
+      specialization: payload.specialization?.trim() || null,
+      user: {
+        update: userData,
       },
-      data: userData,
-    });
-
-    return transaction.doctor.update({
-      where: {
-        id: parsedDoctorId,
-      },
-      data: {
-        specialization: payload.specialization?.trim() || null,
-      },
-      include: {
-        user: {
-          select: {
-            name: true,
-            email: true,
-          },
+    },
+    include: {
+      user: {
+        select: {
+          name: true,
+          email: true,
         },
       },
-    });
+    },
   });
 
   return serializeDoctor(updatedDoctor);
@@ -195,12 +185,10 @@ async function deleteDoctor(doctorId) {
 
   const doctor = await findDoctorByIdOrThrow(parsedDoctorId);
 
-  await prisma.$transaction(async (transaction) => {
-    await transaction.user.delete({
-      where: {
-        id: doctor.userId,
-      },
-    });
+  await prisma.user.delete({
+    where: {
+      id: doctor.userId,
+    },
   });
 
   return serializeDoctor(doctor);
